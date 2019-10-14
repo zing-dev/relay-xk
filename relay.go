@@ -59,11 +59,13 @@ const (
 
 var (
 	ErrDisconnected = errors.New("继电器断开连接")
+	ErrResponseCode = errors.New("发送请求与响应数据不匹配")
+	ErrAddress      = errors.New("继电器地址错误")
 )
 
 var (
-	Request  = [8]byte{RequestHeader, 0}
-	Response = [8]byte{ResponseHeader, 0}
+	request = [8]byte{RequestHeader, 0}
+	//response = [8]byte{ResponseHeader, 0}
 )
 
 //继电器
@@ -74,6 +76,7 @@ type Relay struct {
 	Result      chan []byte
 	waitExit    *sync.WaitGroup
 	Cache       *bytebuf.ByteBuffer
+	address     byte
 }
 
 //继电器配置
@@ -86,6 +89,9 @@ type Config struct {
 
 //继电器连接
 func (r *Relay) Connect() (*Relay, error) {
+	if r.address < 1 {
+		return nil, ErrAddress
+	}
 	c := &serial.Config{
 		Name:        "COM" + strconv.Itoa(r.Config.Port),
 		Baud:        r.Config.Baud,
@@ -105,6 +111,15 @@ func (r *Relay) Connect() (*Relay, error) {
 		go r.receive()
 		return r, err
 	}
+}
+
+//设置继电器地址
+func (r *Relay) SetAddress(address byte) *Relay {
+	if address < 1 {
+		panic(ErrAddress)
+	}
+	r.address = address
+	return r
 }
 
 //数据校验位赋值
@@ -154,91 +169,94 @@ func (r *Relay) receive() {
 }
 
 //关闭所有继电器路数
-func (r *Relay) CloseAllNoReturn(address byte) {
-	if r.isConnected {
-		Request[1] = address
-		Request[2] = 0x33
-		Request[3] = 0x0
-		Request[4] = 0x0
-		Request[5] = 0x0
-		Request[6] = 0x0
-		Request[7] = 0x89
-		r.send(Request[:])
+func (r *Relay) CloseAllNoReturn() error {
+	if !r.isConnected {
+		return ErrDisconnected
 	}
+	request[1] = r.address
+	request[2] = 0x33
+	request[3] = 0x0
+	request[4] = 0x0
+	request[5] = 0x0
+	request[6] = 0x0
+	r.send(r.checkSum(request[:]))
+	return nil
 }
 
 //打开所有继电器路数
-func (r *Relay) OpenAllNoReturn(address byte) {
-	if r.isConnected {
-		Request[1] = address
-		Request[2] = 0x33
-		Request[3] = 0xff
-		Request[4] = 0xff
-		Request[5] = 0xff
-		Request[6] = 0xff
-		r.send(r.checkSum(Request[:]))
-		r.send(Request[:])
+func (r *Relay) OpenAllNoReturn() error {
+	if !r.isConnected {
+		return ErrDisconnected
 	}
+	request[1] = r.address
+	request[2] = 0x33
+	request[3] = 0xff
+	request[4] = 0xff
+	request[5] = 0xff
+	request[6] = 0xff
+	r.send(r.checkSum(request[:]))
+	return nil
 }
 
 //断开某一路
-func (r *Relay) CloseOne(address, index byte) (bool, error) {
+func (r *Relay) CloseOne(index byte) (bool, error) {
 	if !r.isConnected {
 		return false, ErrDisconnected
-	}
-	if address < 1 {
-		return false, errors.New("继电器地址不能小于1")
 	}
 	if index < 1 || index > r.Config.CircuitNumber {
 		return false, errors.New("继电器路数不能小于1或大于最大路数")
 	}
-	Request[1] = address
-	Request[2] = RequestCloseOne
-	Request[3] = 0x00
-	Request[4] = 0x00
-	Request[5] = 0x00
-	Request[6] = index
-	r.send(r.checkSum(Request[:]))
+	request[1] = r.address
+	request[2] = RequestCloseOne
+	request[3] = 0x00
+	request[4] = 0x00
+	request[5] = 0x00
+	request[6] = index
+	r.send(r.checkSum(request[:]))
 	data := <-r.Result
-	log.Println(data, data[6], index)
-	log.Println(data[6] >> index)
-	return data[6]>>index == 0, nil
+	if data[2] == ResponseCloseOne {
+		return data[6]>>index == 0, nil
+	}
+	return false, ErrResponseCode
 }
 
 //打开继电器某一路
-func (r *Relay) OpenOne(address, index byte) (bool, error) {
+func (r *Relay) OpenOne(index byte) (bool, error) {
 	if !r.isConnected {
 		return false, ErrDisconnected
-	}
-	if address < 1 {
-		return false, errors.New("继电器地址不能小于1")
 	}
 	if index < 1 || index > r.Config.CircuitNumber {
 		return false, errors.New("继电器路数不能小于1或大于最大路数")
 	}
-	Request[1] = address
-	Request[2] = RequestOpenOne
-	Request[3] = 0x00
-	Request[4] = 0x00
-	Request[5] = 0x00
-	Request[6] = index
-	r.send(r.checkSum(Request[:]))
+	request[1] = r.address
+	request[2] = RequestOpenOne
+	request[3] = 0x00
+	request[4] = 0x00
+	request[5] = 0x00
+	request[6] = index
+	r.send(r.checkSum(request[:]))
 	data := <-r.Result
-	return data[6]&(1<<(index-1)) == 1<<(index-1), nil
+	if data[2] == ResponseOpenOne {
+		return data[6]&(1<<(index-1)) == 1<<(index-1), nil
+	}
+	return false, ErrResponseCode
 }
 
 //读取继电器路数状态
-func (r *Relay) ReadStatus(address byte) []byte {
-	if r.isConnected {
-		Request[1] = address
-		Request[2] = RequestReadStatus
-		Request[3] = 0x00
-		Request[4] = 0x00
-		Request[5] = 0x00
-		Request[6] = 0x00
-		r.send(r.checkSum(Request[:]))
-		data := <-r.Result
-		return ByteBinary(data[6])
+func (r *Relay) ReadStatus() ([]byte, error) {
+	if !r.isConnected {
+		return nil, ErrDisconnected
 	}
-	return nil
+	request[1] = r.address
+	request[2] = RequestReadStatus
+	request[3] = 0x00
+	request[4] = 0x00
+	request[5] = 0x00
+	request[6] = 0x00
+	r.send(r.checkSum(request[:]))
+	data := <-r.Result
+	if data[2] == ResponseReadStatus {
+		return ByteBinary(data[6]), nil
+	}
+	return nil, ErrResponseCode
 }
