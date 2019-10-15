@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	DataLength     = 0x8
 	RequestHeader  = 0x55 //发送帧数据头
 	ResponseHeader = 0x22 //接受帧数据头
 
@@ -64,8 +65,8 @@ var (
 )
 
 var (
-	request = [8]byte{RequestHeader, 0}
-	//response = [8]byte{ResponseHeader, 0}
+	request = [DataLength]byte{RequestHeader, 0}
+	//response = [DataLength]byte{ResponseHeader, 0}
 )
 
 //继电器
@@ -73,9 +74,9 @@ type Relay struct {
 	conn        *serial.Port
 	isConnected bool
 	Config      *Config
-	Result      chan []byte
+	result      chan []byte
 	waitExit    *sync.WaitGroup
-	Cache       *bytebuf.ByteBuffer
+	cache       *bytebuf.ByteBuffer
 	address     byte
 }
 
@@ -107,7 +108,7 @@ func (r *Relay) Connect() (*Relay, error) {
 		r.isConnected = true
 		r.conn = conn
 		r.waitExit = &sync.WaitGroup{}
-		r.Result = make(chan []byte, 0)
+		r.result = make(chan []byte, 0)
 		go r.receive()
 		return r, err
 	}
@@ -125,10 +126,10 @@ func (r *Relay) SetAddress(address byte) *Relay {
 //数据校验位赋值
 func (r *Relay) checkSum(data []byte) []byte {
 	sum := byte(0)
-	for i := byte(0); i < 7; i += 1 {
+	for i := byte(0); i < DataLength-1; i += 1 {
 		sum += data[i]
 	}
-	data[7] = 0xff & sum
+	data[DataLength-1] = 0xff & sum
 	return data
 }
 
@@ -142,7 +143,7 @@ func (r *Relay) send(data []byte) {
 
 //接收数据
 func (r *Relay) receive() {
-	r.Cache = bytebuf.New(true)
+	r.cache = bytebuf.New(true)
 	r.waitExit.Add(1)
 	defer r.waitExit.Done()
 	buf := make([]byte, 1024)
@@ -153,13 +154,13 @@ func (r *Relay) receive() {
 			r.isConnected = false
 			continue
 		}
-		r.Cache.WriteBytes(buf[0:size])
-		for r.Cache.Len() >= int(r.Config.CircuitNumber) {
-			buf := make([]byte, r.Config.CircuitNumber)
-			r.Cache.ReadBytes(buf)
-			sign := buf[7]
-			if sign == r.checkSum(buf)[7] {
-				r.Result <- buf
+		r.cache.WriteBytes(buf[0:size])
+		for r.cache.Len() >= DataLength {
+			buf := make([]byte, DataLength)
+			r.cache.ReadBytes(buf)
+			sign := buf[DataLength-1]
+			if sign == r.checkSum(buf)[DataLength-1] {
+				r.result <- buf
 			} else {
 				log.Println("响应数据校验失败")
 			}
@@ -213,7 +214,7 @@ func (r *Relay) CloseOne(index byte) (bool, error) {
 	request[5] = 0x00
 	request[6] = index
 	r.send(r.checkSum(request[:]))
-	data := <-r.Result
+	data := <-r.result
 	if data[2] == ResponseCloseOne {
 		return data[6]>>index == 0, nil
 	}
@@ -235,7 +236,7 @@ func (r *Relay) OpenOne(index byte) (bool, error) {
 	request[5] = 0x00
 	request[6] = index
 	r.send(r.checkSum(request[:]))
-	data := <-r.Result
+	data := <-r.result
 	if data[2] == ResponseOpenOne {
 		return data[6]&(1<<(index-1)) == 1<<(index-1), nil
 	}
@@ -254,7 +255,7 @@ func (r *Relay) ReadStatus() ([]byte, error) {
 	request[5] = 0x00
 	request[6] = 0x00
 	r.send(r.checkSum(request[:]))
-	data := <-r.Result
+	data := <-r.result
 	if data[2] == ResponseReadStatus {
 		return ByteBinary(data[6]), nil
 	}
