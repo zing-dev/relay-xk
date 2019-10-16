@@ -66,8 +66,9 @@ var (
 )
 
 var (
+	one     sync.Once
+	relay   *Relay
 	request = [DataLength]byte{RequestHeader, 0}
-	//response = [DataLength]byte{ResponseHeader, 0}
 )
 
 //继电器
@@ -75,7 +76,7 @@ type Relay struct {
 	conn        *serial.Port
 	isConnected bool
 	Config      *Config
-	result      chan []byte
+	response    chan []byte
 	waitExit    *sync.WaitGroup
 	cache       *bytebuf.ByteBuffer
 	address     byte
@@ -87,6 +88,31 @@ type Config struct {
 	Baud          int
 	ReadTimeout   time.Duration
 	CircuitNumber byte
+}
+
+func GetRelay() *Relay {
+	if relay == nil {
+		panic("请先实例化继电器")
+	}
+	return relay
+}
+
+func NewRelay(port, baud int, readTimeout time.Duration, circuitNumber, address byte) *Relay {
+	one.Do(func() {
+		relay := Relay{
+			Config: &Config{
+				Port:          port,
+				Baud:          baud,
+				ReadTimeout:   readTimeout,
+				CircuitNumber: circuitNumber,
+			},
+		}
+		_, err := relay.SetAddress(address).Connect()
+		if err != nil {
+			panic("connect error")
+		}
+	})
+	return relay
 }
 
 //继电器连接
@@ -113,9 +139,9 @@ func (r *Relay) Connect() (*Relay, error) {
 		r.isConnected = true
 		r.conn = conn
 		r.waitExit = &sync.WaitGroup{}
-		r.result = make(chan []byte, 0)
+		r.response = make(chan []byte, 0)
 		go r.receive()
-		return r, err
+		return r, nil
 	}
 }
 
@@ -165,7 +191,7 @@ func (r *Relay) receive() {
 			r.cache.ReadBytes(buf)
 			sign := buf[DataLength-1]
 			if sign == r.checkSum(buf)[DataLength-1] {
-				r.result <- buf
+				r.response <- buf
 			} else {
 				log.Println("响应数据校验失败")
 			}
@@ -219,9 +245,17 @@ func (r *Relay) CloseOne(index byte) (bool, error) {
 	request[5] = 0x00
 	request[6] = index
 	r.send(r.checkSum(request[:]))
-	data := <-r.result
-	if data[2] == ResponseCloseOne {
-		return data[6]>>index == 0, nil
+	response := <-r.response
+	if response[2] == ResponseCloseOne {
+		if index <= 8 {
+			return !(response[6]&(1<<(index-1)) == 1<<(index-1)), nil
+		} else if index <= 16 {
+			return !(response[5]&(1<<(index-9)) == 1<<(index-9)), nil
+		} else if index <= 24 {
+			return !(response[4]&(1<<(index-17)) == 1<<(index-17)), nil
+		} else {
+			return !(response[3]&(1<<(index-25)) == 1<<(index-25)), nil
+		}
 	}
 	return false, ErrResponseCode
 }
@@ -241,9 +275,17 @@ func (r *Relay) OpenOne(index byte) (bool, error) {
 	request[5] = 0x00
 	request[6] = index
 	r.send(r.checkSum(request[:]))
-	data := <-r.result
-	if data[2] == ResponseOpenOne {
-		return data[6]&(1<<(index-1)) == 1<<(index-1), nil
+	response := <-r.response
+	if response[2] == ResponseOpenOne {
+		if index <= 8 {
+			return response[6]&(1<<(index-1)) == 1<<(index-1), nil
+		} else if index <= 16 {
+			return response[5]&(1<<(index-9)) == 1<<(index-9), nil
+		} else if index <= 24 {
+			return response[4]&(1<<(index-17)) == 1<<(index-17), nil
+		} else {
+			return response[3]&(1<<(index-25)) == 1<<(index-25), nil
+		}
 	}
 	return false, ErrResponseCode
 }
@@ -278,24 +320,24 @@ func (r *Relay) RunCMd(circuits []byte) ([]byte, error) {
 		request[6] = BinaryByte(circuits[0:8])
 	}
 	r.send(r.checkSum(request[:]))
-	data := <-r.result
-	if data[2] == ResponseRunCMd {
+	response := <-r.response
+	if response[2] == ResponseRunCMd {
 		result := make([]byte, r.Config.CircuitNumber)
 		switch r.Config.CircuitNumber {
 		case 32:
-			result = append(result, ByteBinary(data[3])...)
-			result = append(result, ByteBinary(data[4])...)
-			result = append(result, ByteBinary(data[5])...)
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[3])...)
+			result = append(result, ByteBinary(response[4])...)
+			result = append(result, ByteBinary(response[5])...)
+			result = append(result, ByteBinary(response[6])...)
 		case 24:
-			result = append(result, ByteBinary(data[4])...)
-			result = append(result, ByteBinary(data[5])...)
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[4])...)
+			result = append(result, ByteBinary(response[5])...)
+			result = append(result, ByteBinary(response[6])...)
 		case 16:
-			result = append(result, ByteBinary(data[5])...)
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[5])...)
+			result = append(result, ByteBinary(response[6])...)
 		case 8:
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[6])...)
 		}
 		return result, nil
 	}
@@ -314,26 +356,52 @@ func (r *Relay) ReadStatus() ([]byte, error) {
 	request[5] = 0x00
 	request[6] = 0x00
 	r.send(r.checkSum(request[:]))
-	data := <-r.result
-	if data[2] == ResponseReadStatus {
+	response := <-r.response
+	if response[2] == ResponseReadStatus {
 		var result []byte
 		switch r.Config.CircuitNumber {
 		case 32:
-			result = append(result, ByteBinary(data[3])...)
-			result = append(result, ByteBinary(data[4])...)
-			result = append(result, ByteBinary(data[5])...)
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[3])...)
+			result = append(result, ByteBinary(response[4])...)
+			result = append(result, ByteBinary(response[5])...)
+			result = append(result, ByteBinary(response[6])...)
 		case 24:
-			result = append(result, ByteBinary(data[4])...)
-			result = append(result, ByteBinary(data[5])...)
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[4])...)
+			result = append(result, ByteBinary(response[5])...)
+			result = append(result, ByteBinary(response[6])...)
 		case 16:
-			result = append(result, ByteBinary(data[5])...)
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[5])...)
+			result = append(result, ByteBinary(response[6])...)
 		case 8:
-			result = append(result, ByteBinary(data[6])...)
+			result = append(result, ByteBinary(response[6])...)
 		}
 		return result, nil
 	}
 	return nil, ErrResponseCode
+}
+
+func (r *Relay) FlipOne(index byte) (byte, error) {
+	if !r.isConnected {
+		return 2, ErrDisconnected
+	}
+	if index < 1 || index > r.Config.CircuitNumber {
+		return 2, errors.New("继电器路数不能小于1或大于最大路数")
+	}
+	request[1] = r.address
+	request[2] = RequestFlipOne
+	request[3] = 0x00
+	request[4] = 0x00
+	request[5] = 0x00
+	request[6] = index
+	r.send(r.checkSum(request[:]))
+	response := <-r.response
+	if index <= 8 {
+		return response[6] >> (index - 1), nil
+	} else if index <= 16 {
+		return response[5] >> (index - 9), nil
+	} else if index <= 24 {
+		return response[4] >> (index - 17), nil
+	} else {
+		return response[3] >> (index - 25), nil
+	}
 }

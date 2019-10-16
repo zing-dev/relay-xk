@@ -24,22 +24,39 @@ func conn() relay.Relay {
 func TestRelay_Connect(t *testing.T) {
 	conn()
 }
+func TestRelay_CloseAllNoReturn(t *testing.T) {
+	r := conn()
+	r.CloseAllNoReturn()
+}
 
 func openOne(r relay.Relay) {
-	_, _ = r.OpenOne(1)
-	_, _ = r.OpenOne(2)
+	a1, _ := r.OpenOne(1)
+	a2, _ := r.OpenOne(2)
+	a3, _ := r.OpenOne(3)
+	a4, _ := r.OpenOne(4)
+	a5, _ := r.OpenOne(5)
+	log.Println(a1, a2, a3, a4, a5)
 }
+
 func TestRelay_OpenOne(t *testing.T) {
 	openOne(conn())
 }
 
 func closeOne(r relay.Relay) {
-	_, _ = r.CloseOne(1)
-	_, _ = r.CloseOne(2)
+	a1, _ := r.CloseOne(1)
+	a2, _ := r.CloseOne(2)
+	a3, _ := r.CloseOne(3)
+	a4, _ := r.CloseOne(4)
+	a5, _ := r.CloseOne(5)
+	log.Println(a1, a2, a3, a4, a5)
 }
 
 func TestRelay_CloseOne(t *testing.T) {
-	closeOne(conn())
+	r := conn()
+	openOne(r)
+	closeOne(r)
+	openOne(r)
+	closeOne(r)
 }
 
 func readStatus(r relay.Relay) {
@@ -81,4 +98,23 @@ func TestBinaryByte(t *testing.T) {
 	log.Println(relay.BinaryByte([]byte{0, 0, 0, 0, 1, 0, 0, 0}))
 	log.Println(relay.BinaryByte([]byte{0, 0, 0, 0, 0, 0, 1, 1}))
 	log.Println(relay.BinaryByte([]byte{1, 0, 0, 0, 0, 0, 0, 0}))
+}
+
+func TestRelay_FlipOne(t *testing.T) {
+	r := conn()
+	//r.CloseAllNoReturn()
+	status, _ := r.FlipOne(7)
+	log.Println(status)
+}
+
+func TestName(t *testing.T) {
+	log.Println(1 << 7)
+	log.Println(7&(1<<(25-25)) == 1<<(25-25))
+	log.Println(3>>1 == 1)
+	log.Println(3&(1<<1) == 1<<1)
+	log.Println(5&(1<<2) == 1<<2)
+	log.Println(5>>2 == 1)
+	log.Println(5&(1<<2)>>2 == 1)
+	log.Println(1 >> 1)
+	log.Println(1 >> 0)
 }
