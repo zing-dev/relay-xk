@@ -59,9 +59,10 @@ const (
 )
 
 var (
-	ErrDisconnected = errors.New("继电器断开连接")
-	ErrResponseCode = errors.New("发送请求与响应数据不匹配")
-	ErrAddress      = errors.New("继电器地址错误")
+	ErrDisconnected  = errors.New("继电器断开连接")
+	ErrResponseCode  = errors.New("发送请求与响应数据不匹配")
+	ErrAddress       = errors.New("继电器地址错误")
+	ErrCircuitNumber = errors.New("继电器路数错误,必须是8的倍数")
 )
 
 var (
@@ -92,6 +93,10 @@ type Config struct {
 func (r *Relay) Connect() (*Relay, error) {
 	if r.address < 1 {
 		return nil, ErrAddress
+	}
+
+	if r.Config.CircuitNumber%8 != 0 {
+		return nil, ErrCircuitNumber
 	}
 	c := &serial.Config{
 		Name:        "COM" + strconv.Itoa(r.Config.Port),
@@ -243,6 +248,60 @@ func (r *Relay) OpenOne(index byte) (bool, error) {
 	return false, ErrResponseCode
 }
 
+//以字节数组命令运行
+func (r *Relay) RunCMd(circuits []byte) ([]byte, error) {
+	if !r.isConnected {
+		return nil, ErrDisconnected
+	}
+	if len(circuits) != int(r.Config.CircuitNumber) {
+		return nil, errors.New("参数长度必须等于继电器路数")
+	}
+	request[1] = r.address
+	request[2] = RequestRunCMd
+	request[3] = 0x00
+	request[4] = 0x00
+	request[5] = 0x00
+	switch r.Config.CircuitNumber {
+	case 32:
+		request[3] = BinaryByte(circuits[0:8])
+		request[4] = BinaryByte(circuits[8:16])
+		request[5] = BinaryByte(circuits[16:24])
+		request[6] = BinaryByte(circuits[24:32])
+	case 24:
+		request[4] = BinaryByte(circuits[0:8])
+		request[5] = BinaryByte(circuits[8:16])
+		request[6] = BinaryByte(circuits[16:24])
+	case 16:
+		request[5] = BinaryByte(circuits[0:8])
+		request[6] = BinaryByte(circuits[8:16])
+	case 8:
+		request[6] = BinaryByte(circuits[0:8])
+	}
+	r.send(r.checkSum(request[:]))
+	data := <-r.result
+	if data[2] == ResponseRunCMd {
+		result := make([]byte, r.Config.CircuitNumber)
+		switch r.Config.CircuitNumber {
+		case 32:
+			result = append(result, ByteBinary(data[3])...)
+			result = append(result, ByteBinary(data[4])...)
+			result = append(result, ByteBinary(data[5])...)
+			result = append(result, ByteBinary(data[6])...)
+		case 24:
+			result = append(result, ByteBinary(data[4])...)
+			result = append(result, ByteBinary(data[5])...)
+			result = append(result, ByteBinary(data[6])...)
+		case 16:
+			result = append(result, ByteBinary(data[5])...)
+			result = append(result, ByteBinary(data[6])...)
+		case 8:
+			result = append(result, ByteBinary(data[6])...)
+		}
+		return result, nil
+	}
+	return nil, ErrResponseCode
+}
+
 //读取继电器路数状态
 func (r *Relay) ReadStatus() ([]byte, error) {
 	if !r.isConnected {
@@ -257,7 +316,24 @@ func (r *Relay) ReadStatus() ([]byte, error) {
 	r.send(r.checkSum(request[:]))
 	data := <-r.result
 	if data[2] == ResponseReadStatus {
-		return ByteBinary(data[6]), nil
+		var result []byte
+		switch r.Config.CircuitNumber {
+		case 32:
+			result = append(result, ByteBinary(data[3])...)
+			result = append(result, ByteBinary(data[4])...)
+			result = append(result, ByteBinary(data[5])...)
+			result = append(result, ByteBinary(data[6])...)
+		case 24:
+			result = append(result, ByteBinary(data[4])...)
+			result = append(result, ByteBinary(data[5])...)
+			result = append(result, ByteBinary(data[6])...)
+		case 16:
+			result = append(result, ByteBinary(data[5])...)
+			result = append(result, ByteBinary(data[6])...)
+		case 8:
+			result = append(result, ByteBinary(data[6])...)
+		}
+		return result, nil
 	}
 	return nil, ErrResponseCode
 }
