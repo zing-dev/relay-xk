@@ -19,7 +19,7 @@ const (
 	RequestReadStatus = 0x10 //读取状态
 	RequestCloseOne   = 0x11 //断开某路
 	RequestOpenOne    = 0x12 //吸合某路
-	RequestRunCMd     = 0x13 //命令执行
+	RequestRunCMD     = 0x13 //命令执行
 	RequestCloseGroup = 0x14 //组断开
 	RequestOpenGroup  = 0x15 //组吸合
 	RequestFlipGroup  = 0x16 //组翻转
@@ -28,10 +28,10 @@ const (
 	RequestPointOpen  = 0x21 //点动闭合
 	RequestPointClose = 0x21 //点动断开
 
-	RequestFlipOneNoReturn  = 0x30 //翻转某路 下位机不返回数据，指令可以连续发送
+	RequestFlipOneNoReturn  = 0x30 //翻转某路 下位机不返回数据，指0令可以连续发送
 	RequestCloseOneNoReturn = 0x31 //断开某路
 	RequestOpenOneNoReturn  = 0x32 //吸合某路
-	RequestRunCMdNoReturn   = 0x33 //命令执行
+	RequestRunCMDNoReturn   = 0x33 //命令执行
 
 	RequestCloseGroupNoReturn = 0x34 //组断开
 	RequestOpenGroupNoReturn  = 0x35 //组吸合
@@ -49,7 +49,7 @@ const (
 	ResponseReadStatus         = 0x10 //读取状态
 	ResponseCloseOne           = 0x11 //关闭某一路
 	ResponseOpenOne            = 0x12 //打开某一路
-	ResponseRunCMd             = 0x13 //命令执行
+	ResponseRunCMD             = 0x13 //命令执行
 	ResponseCloseGroup         = 0x14 //组断开
 	ResponseOpenGroup          = 0x15 //组吸合
 	ResponseFlipGroup          = 0x16 //组翻转
@@ -291,7 +291,7 @@ func (r *Relay) OpenOne(index byte) (bool, error) {
 }
 
 //以字节数组命令运行
-func (r *Relay) RunCMd(circuits []byte) ([]byte, error) {
+func (r *Relay) RunCMD(circuits []byte) ([]byte, error) {
 	if !r.isConnected {
 		return nil, ErrDisconnected
 	}
@@ -299,7 +299,7 @@ func (r *Relay) RunCMd(circuits []byte) ([]byte, error) {
 		return nil, errors.New("参数长度必须等于继电器路数")
 	}
 	request[1] = r.address
-	request[2] = RequestRunCMd
+	request[2] = RequestRunCMD
 	request[3] = 0x00
 	request[4] = 0x00
 	request[5] = 0x00
@@ -321,7 +321,7 @@ func (r *Relay) RunCMd(circuits []byte) ([]byte, error) {
 	}
 	r.send(r.checkSum(request[:]))
 	response := <-r.response
-	if response[2] == ResponseRunCMd {
+	if response[2] == ResponseRunCMD {
 		result := make([]byte, r.Config.CircuitNumber)
 		switch r.Config.CircuitNumber {
 		case 32:

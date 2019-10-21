@@ -26,7 +26,7 @@ func TestRelay_Connect(t *testing.T) {
 }
 func TestRelay_CloseAllNoReturn(t *testing.T) {
 	r := conn()
-	r.CloseAllNoReturn()
+	_ = r.CloseAllNoReturn()
 }
 
 func openOne(r relay.Relay) {
